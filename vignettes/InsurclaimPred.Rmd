@@ -1,0 +1,144 @@
+---
+title: "InsurclaimPred"
+author: Seonghwa Min
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{InsurclaimPred}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(InsurclaimPred)
+library(tidyverse)
+library(insuranceData)
+library(insurancerating)
+```
+## Analzying Insurance data
+Going through the insurance date in package insuranceData, I noticed alot of commonalities in how different companies and countries show insurance data. It usually had spatial variable to represent how much of the year the policy holder was insured and had how much the claims were and the frequencies. It led to questioning what would be the best way to analyze such data samples to correctly evaluate risk since insurance is buying risks. This vignette is an introduction to the InsurclaimPred package to analyze insurance data with various data types.
+
+The purpose of this package is to provide tools to analyze insurance data that has various data types such as continuous variables, spatial variables such as exposures, and categorical variables such as area. First, to evaluate the preliminary multivariate linear regression, we will use several functions from the package to fit the data in linear regression and evaluate the fit.
+
+Below, prelimmult function shows the coefficients from multivariate linear regression fit. It includes p-values, t-values and standard error as well.
+
+Next, the minpval function evaluates the above fit and shows the p-values and the confidence interval for the beta values for corresponding p-values.
+```{r}
+prelimmult <- function(data, y) {
+    data <- data %>% select(-contains('claims'))
+    lms <- lm(y ~ . , data = data)
+    asum <- summary(lms)$coefficients
+    asum
+}
+
+minpval <- function(data, y) {
+
+    data <- data %>% select(-contains('claims'))
+    lms <- lm(y ~ ., data = data)
+    asum <- summary(lms)$coefficients
+    print(asum[,"Pr(>|t|)"])
+    confint(lms, level = 0.95)
+
+}
+
+```
+
+Above fit can be evaluated to see if it was a good fit using the package. We can find the colinearity, formal and visual test for nomrmality and influential points. For colinearity, variance inflation factor will be calculated and compared to the criteria number that is defaulted to 10. For normality, we will conduct a visual inspection of QQ-plot and Shapiro-Wilk test. For influential points, Cook's distance was calculated using 4/n. Visual plot is also made to see which points have exceed the Cook's distance. 
+
+```{r}
+colin <- function(data, y, crit = 10) {
+    data <- as.data.frame(data)
+    lms <- lm(y ~ ., data = data)
+    gvif <- car::vif(lms)[, 1]
+    print(gvif)
+    gvif > crit
+}
+influential<-function(data, y){
+  data<-as.data.frame(data)
+  lms<-lm(y~.,data = data)
+  plot(lms,4)
+  abline(b=0,a=4/nrow(data),col="red")
+  names(which(cooks.distance(lms) > 4/nrow(data)))
+}
+normality<-function(data, y){
+  data<-as.data.frame(data)
+  lms<-lm(y~.,data = data)
+  plot(lms,2)
+  print(shapiro.test(sample(rstandard(lms),1000)))
+  }
+```
+
+Above linear fit will usually conclude to be insufficient because usually they will show most of the variables as significant where normality assumptions are violated. Therefore, we will use the Generalized Additive model to assess the data. We would use the methods from Henckaerts at al. (2018) to fit GAM models and then GLM model to compare. Here we can utilize the clustplot.claimfrequency and clustplot.claimseverity functions can be used to provide plots with tariff classes from the continuous variable
+
+```{r}
+clustplot.claimfreqency <- function(object) {
+
+    autoplot(object, show_observations = TRUE)
+    clusters_freq <- construct_tariff_classes(object)
+    autoplot(clusters_freq, show_observations = TRUE)
+}
+clustplot.claimseverity <- function(object) {
+    clusters_sev <- construct_tariff_classes(object)
+    autoplot(object, show_observations = TRUE)
+    autoplot(clusters_sev, show_observations = TRUE)
+}
+
+```
+
+
+After assessing the GAM fit, we can now add the above clusters to the data set for mainpulation or visualization. We can utilize the function addclustvar with GAM fit as the variable with the original data.
+
+```{r}
+
+addclustvar <- function(object, data) {
+
+    clusters_freq <- construct_tariff_classes(object)
+    mutdata <- data %>%
+        mutate(freq_clusters = clusters_freq$tariff_classes) %>%
+        mutate(across(where(is.character), as.factor)) %>%
+        mutate(across(where(is.factor), ~biggest_reference(., exposure)))
+
+    summary(mutdata)
+    return(invisible(mutdata))
+}
+```
+
+With the clustered data above, we can fit generalized linear function to analyze the fit using the variable we just made. You can add any other variable to comapre two models based on your hypothesis set up. The comparison plot can be shown using the function glmlotcomp function. It accepts two glm models with the data set with frequency cluster.
+
+We can compare these models further by using the performance test function, glmperf function. It will compare AIC values, overdispersion and QQ plot see if there is any deviation from the distribution from generalized linear model set up.
+
+```{r}
+glmplotcomp <- function(object1, object2, model) {
+    rating_factors(object1, object2, model_data = model) %>%
+        autoplot()
+
+}
+glmperf<-function(object1,object2){
+  print(model_performance(object1,object2))
+  print(check_overdispersion(object1))
+  print(check_overdispersion(object2))
+  print(check_residuals(object1,n_simulations = 1000) %>% autoplot(.))
+  print(check_residuals(object2,n_simulations = 1000) %>% autoplot(.))
+}
+
+```
+Lastly, we can add predicted values from the generalized linear models to the data set so that it can be used for manipulation and visualization. The significance of the prediction is that it contains the information from discrete varaibles to set up the frequency clustering.
+```{r}
+glmpred <- function(object1, object2, model) {
+    data_pred <- model %>%
+        add_prediction(object1, object2)
+
+    return(invisible(data_pred))
+
+}
+```
+
+
+
+
